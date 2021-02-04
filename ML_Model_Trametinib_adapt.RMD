@@ -1,0 +1,358 @@
+---
+title: "Trametinib Prediction Example"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+library(caret)
+library(tidyverse)
+library(ggplot2)
+library(ggpubr)
+
+```
+## Import Data
+KSEA and Drug response data is inported using thr read.csv function. KSEA data is then scaled by the caret::preprocess function and then merged with Drug response data to make the ML input dataframe.  
+
+```{r}
+#Load Files
+Kinase_Activity <- read.csv("Kinase_activity_PDT.csv",h=T, row.names = "ids") #(loads kinase activity dataset)
+Drug_Response<- read.csv("Drug_response.csv",h=T, row.names = "ids") #(loads drug response dataset)
+
+#Centre and Scale Kinase Activity Dataset
+ML_test_no <- caret::preProcess(Kinase_Activity, method = c("zv","center", "scale"))
+Kinase_Activity_Processed <- predict(ML_test_no, Kinase_Activity)
+
+#Link Kinase Activity data to Drug Response to Trametinib
+Trametinib_Response<- Drug_Response[,"MEKi.response.1microM", drop = F]
+colnames(Trametinib_Response)<-("Trametinib_1uM")
+
+Kinase_Activity_Trametinib<-merge(x = Kinase_Activity_Processed,
+                                  y = Trametinib_Response, 
+                                  by = "row.names") %>% data.frame(row.names = "Row.names")
+
+```
+#Create Data Partitions
+
+Train and test values are split using the caret::createDataPartition function. This creates an an index value which is used do to select sample rows for train and test datasets. 
+```{r}
+#Create Partition of Train Set and Test Set
+set.seed(41) #MEKi
+index <- createDataPartition(Kinase_Activity_Trametinib$Trametinib_1uM, p=0.70, list=FALSE)
+trainSet <- Kinase_Activity_Trametinib[index,]
+testSet <- Kinase_Activity_Trametinib[-index,]
+```
+# Select features using Partial Least Squares(PLS)
+The training method used by the PLS algorithm is described in the fit_control variable. Models are build using the "leave one out cross validation"(LOOCS) method. This is repeated 10 times to produce the final model. 
+
+The model is then trained by the train function with a "RMSE" model error readout.
+
+Important variables are drawn from the PLS_fitmodel by using the varImp function and those with an importance value less than 50 are removed. 
+
+```{r}
+#Generate PLS Model for Feature Selection
+fit_control <- trainControl(
+  method = "LOOCV",
+  number = 10)
+
+PLS_fit <- train(Trametinib_1uM ~ ., 
+                data = trainSet, 
+                metric = "RMSE",
+                method = "pls",
+                tuneLength = 7,
+                maximize=TRUE,
+                trControl = fit_control,
+                linout = TRUE)
+
+#Select Features with Importance > 50 in PLS Model
+Importance <- varImp(PLS_fit)[["importance"]] 
+Important_variables <- subset(Importance, Overall>50)
+Important_variables$kinase<-rownames(Important_variables)
+```
+##Bar plot of the top 50 importance values
+```{r, echo=F}
+#Plot Features with Importance > 50 in PLS Model
+ggplot(Important_variables, aes(x=reorder(kinase, -Overall), y=Overall))+
+  geom_bar(stat="identity", color="black", position=position_dodge())+
+  theme_minimal()+
+  xlab("Kinase")+
+  ylab("Importance")+
+  theme(axis.text.x = element_text(angle = 90))
+
+```
+# Build random forest (RF) models using only important variables 
+Filter RF input data to only Important variables. The models using the "rf" algorithm and a "RMSE" error readout. 
+
+```{r}
+#Filter Features with Importance > 50 in PLS Model in Train and Test set for RF Model
+Important_variables <- c(Important_variables$kinase, "Trametinib_1uM")
+trainSet<- trainSet[,Important_variables]
+testSet<- testSet[,Important_variables]
+    
+#Generate RF Model
+fit_control <- trainControl(
+  method = "LOOCV",
+  number = 20)
+
+rf_fit <- train(Trametinib_1uM ~ ., 
+                data = trainSet, 
+                metric = "RMSE",
+                method = "rf",
+                tuneLength = 7,
+                maximize=TRUE,
+                trControl = fit_control,
+                ntree=1000,
+                linout = TRUE)
+```
+## Summary of RF model Generated
+```{r, echo=F}
+#Summary of the Generated RF Model
+rf_fit
+rf_fit$finalModel
+rf_fit$results
+```
+# Model Evaluation
+Predictions of model performance in test data is used to evaluate model accuracy.
+```{r}
+#Generate Datasets of Predicted and Measured Values for Train and Test Sets
+
+
+trainplot <- merge(x = predict(rf_fit, trainSet) ,
+                   y = trainSet[, "Trametinib_1uM", drop = F],
+                   by = "row.names")
+
+colnames(trainplot) <- c("ids", "Predicted", "Measured")
+
+testplot <- merge(x = predict(rf_fit, testSet) ,
+                  y = testSet[, "Trametinib_1uM", drop = F],
+                  by = "row.names")
+
+colnames(testplot) <- c("ids", "Predicted", "Measured")
+
+#Calculate RMSE for Train and Test Sets
+Train_RMSE<-RMSE(trainplot$Predicted, trainplot$Measured ,na.rm = T)
+Test_RMSE<-RMSE(testplot$Predicted, testplot$Measured, na.rm = T)
+
+print(paste("Train RMSE:",round(Train_RMSE, 2)))
+print(paste("Test RMSE", round(Test_RMSE,2)))
+```
+## Dotplots of RF model accuracy
+```{r, echo=F, error=FALSE, warning=FALSE, message=FALSE}
+pp1 <- ggplot(testplot, aes(x=Measured, y=Predicted, label=ids))+
+  ggpubr::stat_cor(method="spearman")+
+  ggrepel::geom_text_repel()+
+  ylim(c(0,1))+
+  geom_smooth(method="lm", col ="grey", se=F)+
+  geom_point(size = 5, col=c("red",'brown','blue', "cyan", "orange","green", "purple",
+                              "violet"))+
+  ggtitle("Test Set Performance")+
+  theme_minimal()
+
+pp2 <- ggplot(trainplot, aes(x=Measured, y=Predicted, label=ids))+
+  ggpubr::stat_cor(method="spearman")+
+  geom_smooth(method="lm", col ="grey", se=F)+
+  ylim(c(0,1))+
+  geom_point(size = 5, col="black")+
+  ggtitle("Test Set Performance")+
+  theme_minimal()
+
+plot(cowplot::plot_grid(pp1, pp2, ncol=2))
+```
+# Identify important feature of the RF model
+Draw feature importance values from the model
+
+```{r}
+Importance <- varImp(rf_fit)[["importance"]] 
+Important_variables <- subset(Importance, Overall>20)
+Important_variables$kinase<-rownames(Important_variables)
+```
+## Barplot of most important features
+
+```{r, echo=F, error=FALSE, warning=FALSE, message=FALSE}
+ggplot(Important_variables, aes(x=reorder(kinase, -Overall), y=Overall))+
+  geom_bar(stat="identity", color="black", position=position_dodge())+
+  xlab("Kinase")+
+  ylab("Importance")+
+  theme(
+    strip.text.x = element_text(size = 18),
+    strip.background = element_rect(fill = "white", size = 1),
+    axis.text.x = element_text(
+      size = 16,
+      colour = "black",
+      angle = 90,
+      hjust = 0.95,
+      vjust = 0.2
+    ),
+    axis.text.y = element_text(
+      size = 16,
+      colour = "black",
+      hjust = 0.95,
+      vjust = 0.2
+    ),
+    axis.line = element_line(color = "black")
+  )+
+  theme_minimal()
+```
+# Ensamble generation of models
+Create a multicore for loop to generate 50 rf models
+
+
+```{r, eval=F, error=FALSE, warning=FALSE, message=FALSE}
+#import multicore processing packages
+library(doParallel)
+library(foreach)
+
+#Set up cores
+doParallel::registerDoParallel(cores=4)
+
+#random list of seeds to iterate through
+seeds<- runif(n=50, min=1, max=500) %>% round(0)
+i <- seeds[1]
+#begining of multicore for loop
+results <- foreach(i = seeds, .combine="rbind", .packages = c("caret", "stats", "dplyr"))%dopar%{
+  
+  set.seed(i)
+  
+  #create data partitions
+  index <-
+    createDataPartition(Kinase_Activity_Trametinib$Trametinib_1uM,
+                        p = 0.70,
+                        list = FALSE)
+  trainSet <- Kinase_Activity_Trametinib[index, ]
+  testSet <- Kinase_Activity_Trametinib[-index, ]
+  fit_control <- trainControl(method = "LOOCV",
+                              number = 10)
+  
+  PLS_fit <- train(
+    Trametinib_1uM ~ .,
+    data = trainSet,
+    metric = "RMSE",
+    method = "pls",
+    tuneLength = 7,
+    maximize = TRUE,
+    trControl = fit_control,
+    linout = TRUE
+  )
+  
+  #Select Features with Importance > 50 in PLS Model
+  Importance <- varImp(PLS_fit)[["importance"]]
+  Important_variables <- subset(Importance, Overall > 50)
+  Important_variables$kinase <- rownames(Important_variables)
+  
+  #Filter Features with Importance > 50 in PLS Model in Train and Test set for RF Model
+  Important_variables <-
+    c(Important_variables$kinase, "Trametinib_1uM")
+  trainSet <- trainSet[, Important_variables]
+  testSet <- testSet[, Important_variables]
+  
+  #Generate RF Model
+  fit_control <- trainControl(## 10-fold CV
+    method = "LOOCV",
+    number = 20)
+  
+  rf_fit <- train(
+    Trametinib_1uM ~ .,
+    data = trainSet,
+    metric = "RMSE",
+    method = "rf",
+    tuneLength = 7,
+    maximize = TRUE,
+    trControl = fit_control,
+    ntree = 1000,
+    linout = TRUE
+  )
+  
+  trainplot <- merge(x = predict(rf_fit, trainSet) ,
+                     y = trainSet[, "Trametinib_1uM", drop = F],
+                     by = "row.names")
+  
+  colnames(trainplot) <- c("ids", "Predicted", "Measured")
+  
+  testplot <- merge(x = predict(rf_fit, testSet) ,
+                    y = testSet[, "Trametinib_1uM", drop = F],
+                    by = "row.names")
+  
+  colnames(testplot) <- c("ids", "Predicted", "Measured")
+  
+  #Calculate RMSE for Train and Test Sets
+  Train_RMSE <-
+    RMSE(trainplot$Predicted, trainplot$Measured , na.rm = T)
+  Test_RMSE <- RMSE(testplot$Predicted, testplot$Measured, na.rm = T)
+  
+  #Calculate Spearman Rank Correlation Coefficients
+  Train_p <-
+    cor.test(trainplot$Predicted, trainplot$Measured, method = "spearman")
+  Test_p <-
+    cor.test(testplot$Predicted, testplot$Measured, method = "spearman")
+  
+  #Get Important features from RF model
+  Importance <- varImp(rf_fit)[["importance"]]
+  rf_Important_variables <- subset(Importance, Overall > 20)
+  
+  #combine results to output
+  out <- data.frame(
+    "seed" = i,
+    "Train_RMSE"= Train_RMSE,
+    "Test_RMSE"=Test_RMSE,
+    "Train_p" = Train_p[[3]],
+    "Test_p" = Test_p[[3]],
+    "Train_coef" = Train_p[[4]],
+    "Test_coef" = Test_p[[4]],
+    "n_features_input" = length(Important_variables),
+    "Important_features" = paste(rownames(rf_Important_variables), collapse=";"),
+    "important_features_value" =  paste(rf_Important_variables$Overall, collapse=";")
+  )
+  
+  return(out)
+}
+
+write.csv(results, file = "Ensamble_rf_results.csv")
+```
+
+## Summary of Features
+
+
+
+```{r, echo=F, error=FALSE, warning=FALSE, message=FALSE}
+
+results <- read.csv("Ensamble_rf_results.csv")
+
+df_boxplot <- reshape2::melt(results[, c("seed","Test_RMSE", "Train_RMSE")],id.var = "seed")
+df_boxplot$variable <- gsub(x=df_boxplot$variable, pattern = "_RMSE", replacement = "") 
+pp1 <- ggplot(df_boxplot, aes(x=variable, y=value))+
+  geom_boxplot(colour="black")+
+  geom_point(colour="black", pch=16, size = 5)+
+  ylim(0,0.5)+
+  ylab("RMSE")+
+  xlab("")+
+  theme(strip.text.x = element_text(size=18))+
+  theme(strip.background = element_rect( fill="white", size=1))+
+  theme(axis.title.x= element_text(size=18))+
+  theme(axis.text.x=element_text(size=16, colour = "black", hjust=0.95,vjust=0.2))+
+  theme(axis.text.y=element_text(size=16, colour = "black",  hjust=0.95,vjust=0.2))+
+  theme(axis.line = element_line(color="black"))+
+  theme_minimal()
+
+ df_barplot <- strsplit(paste(results$Important_features), split = ";")%>% unlist() 
+ df_barplot <- table(df_barplot) %>% data.frame()
+ df_barplot$Freq <- as.double(df_barplot$Freq)
+ colnames(df_barplot) <- c("Kinase", "Freq")
+ df_barplot <- arrange(df_barplot, Freq)
+
+ pp2 <- ggplot(df_barplot, aes(x=reorder(Kinase, -Freq), y=Freq, fill = Kinase))+
+   geom_bar(stat="identity")+
+   ylab("Frequency")+
+   theme_minimal()+
+   xlab("Kinase")+
+   theme(legend.position = "none", 
+         axis.title.y =element_text(vjust = 4),
+         axis.text.x=element_text(angle=90),
+         axis.title.x = element_text(vjust=-2))+
+   ggtitle("Frequency of Important kinases")
+
+ plot(cowplot::plot_grid(pp1, pp2, ncol=2, rel_widths = c(0.3, 0.7)))
+```
+
