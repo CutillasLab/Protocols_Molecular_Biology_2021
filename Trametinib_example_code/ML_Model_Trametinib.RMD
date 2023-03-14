@@ -3,11 +3,13 @@ title: "Trametinib Prediction Example"
 output: html_notebook
 ---
 
-This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
 
-Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
 
 ```{r}
+list.of.packages <- c("ggplot2", "caret","tidyverse","ggpubr","pls","randomForest")
+new.packages <- list.of.packages[!(list.of.packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)>0) install.packages(new.packages)
+
 library(caret)
 library(tidyverse)
 library(ggplot2)
@@ -19,8 +21,12 @@ KSEA and Drug response data is inported using thr read.csv function. KSEA data i
 
 ```{r}
 #Load Files
-Kinase_Activity <- read.csv("Kinase_activity_PDT.csv",h=T, row.names = "ids") #(loads kinase activity dataset)
-Drug_Response<- read.csv("Drug_response.csv",h=T, row.names = "ids") #(loads drug response dataset)
+f <- "https://raw.githubusercontent.com/CutillasLab/Protocols_Molecular_Biology_2021/main/Example_data/Drug_response.csv"
+Drug_Response <- read.csv(f,h=T, row.names = "ids")#(loads drug response dataset)
+
+ 
+f.pdt <- "https://raw.githubusercontent.com/CutillasLab/Protocols_Molecular_Biology_2021/main/Example_data/Kinase_activity_PDT.csv"
+Kinase_Activity <- read.csv(f.pdt,h=T, row.names = "ids")#(loads kinase activity dataset)
 
 #Centre and Scale Kinase Activity Dataset
 ML_test_no <- caret::preProcess(Kinase_Activity, method = c("zv","center", "scale"))
