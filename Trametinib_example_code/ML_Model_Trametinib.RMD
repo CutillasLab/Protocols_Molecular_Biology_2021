@@ -86,7 +86,7 @@ ggplot(Important_variables, aes(x=reorder(kinase, -Overall), y=Overall))+
   theme_minimal()+
   xlab("Kinase")+
   ylab("Importance")+
-  theme(axis.text.x = element_text(angle = 90))
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
 
 ```
 # Build random forest (RF) models using only important variables 
@@ -154,7 +154,7 @@ pp1 <- ggplot(testplot, aes(x=Measured, y=Predicted, label=ids))+
   geom_smooth(method="lm", col ="grey", se=F)+
   geom_point(size = 5, col=c("red",'brown','blue', "cyan", "orange","green", "purple",
                               "violet"))+
-  ggtitle("Test Set Performance")+
+  ggtitle("Testing Set Performance")+
   theme_minimal()
 
 pp2 <- ggplot(trainplot, aes(x=Measured, y=Predicted, label=ids))+
@@ -162,7 +162,7 @@ pp2 <- ggplot(trainplot, aes(x=Measured, y=Predicted, label=ids))+
   geom_smooth(method="lm", col ="grey", se=F)+
   ylim(c(0,1))+
   geom_point(size = 5, col="black")+
-  ggtitle("Test Set Performance")+
+  ggtitle("Training Set Performance")+
   theme_minimal()
 
 plot(cowplot::plot_grid(pp1, pp2, ncol=2))
@@ -322,7 +322,7 @@ write.csv(results, file = "Ensamble_rf_results.csv")
 
 
 
-```{r, echo=F, error=FALSE, warning=FALSE, message=FALSE}
+```{r, echo=F, error=FALSE, warning=FALSE, message=FALSE, fig.width=15, fig.height=8}
 
 results <- read.csv("Ensamble_rf_results.csv")
 
@@ -355,10 +355,12 @@ pp1 <- ggplot(df_boxplot, aes(x=variable, y=value))+
    xlab("Kinase")+
    theme(legend.position = "none", 
          axis.title.y =element_text(vjust = 4),
-         axis.text.x=element_text(angle=90),
-         axis.title.x = element_text(vjust=-2))+
+         axis.text.x=element_text(angle=90, vjust = 0.5, hjust=1),
+         axis.title.x = element_text(vjust=0))+
    ggtitle("Frequency of Important kinases")
 
+ df_barplot[order(-df_barplot$Freq),]
+ 
  plot(cowplot::plot_grid(pp1, pp2, ncol=2, rel_widths = c(0.3, 0.7)))
 ```
 
